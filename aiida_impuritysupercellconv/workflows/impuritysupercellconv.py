@@ -221,7 +221,7 @@ class IsolatedImpurityWorkChain(ProtocolMixin, WorkChain):
         spec.input(
             "pseudo_family",
             valid_type=orm.Str,
-            default=lambda: orm.Str("SSSP/1.2/PBE/efficiency"),
+            default=lambda: orm.Str("SSSP/1.3/PBE/efficiency"),
             required=False,
             help="The label of the pseudo family",
         )
@@ -319,7 +319,7 @@ class IsolatedImpurityWorkChain(ProtocolMixin, WorkChain):
         conv_thr: float = 0.0257,
         kpoints_distance: float = 0.301,
         charge_supercell: bool = True,
-        pseudo_family: str ="SSSP/1.2/PBE/efficiency",
+        pseudo_family: str ="SSSP/1.3/PBE/efficiency",
         max_iter_num: int = 4,
         **kwargs,
     ):
