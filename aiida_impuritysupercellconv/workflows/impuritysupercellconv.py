@@ -19,7 +19,7 @@ from aiida_quantumespresso.data.hubbard_structure import HubbardStructureData
 from aiida_muon.utils.hubbard import check_get_hubbard_u_parms
 from aiida_quantumespresso.common.hubbard import Hubbard
 
-StructureData = DataFactory("atomistic.structure")
+#StructureData = DataFactory("atomistic.structure")
 PwBaseWorkChain = WorkflowFactory('quantumespresso.pw.base')
 PwRelaxWorkChain = WorkflowFactory('quantumespresso.pw.relax')
 original_PwRelaxWorkChain = WorkflowFactory('quantumespresso.pw.relax')
@@ -45,10 +45,6 @@ def create_hubbard_structure(structure: LegacyStructureData,hubbard_dict: dict):
         
     hubbard_structure.hubbard = Hubbard.from_list(hubbard_structure.hubbard.to_list(), projectors="atomic")
     return hubbard_structure
-
-def assign_hubbard_parameters(structure: StructureData, hubbard_dict):
-    for kind, U in hubbard_dict.items():
-        structure.hubbard.initialize_onsites_hubbard(kind, '3d', U, 'U', use_kinds=True)
         
 @calcfunction
 def init_supcgen(aiida_struc, min_length):
@@ -62,10 +58,7 @@ def init_supcgen(aiida_struc, min_length):
     p_scst_without_mu = p_scst_mu.copy()
     p_scst_without_mu.pop(-1)    #pop out the muon since it is the last that was appendded
 
-    if isinstance(aiida_struc,StructureData):
-        ad_scst = StructureData(pymatgen=p_scst_mu)
-        ad_scst_without_mu = StructureData(pymatgen=p_scst_without_mu)
-    elif isinstance(aiida_struc,LegacyStructureData):
+    if isinstance(aiida_struc,LegacyStructureData):
         ad_scst = LegacyStructureData(pymatgen=p_scst_mu)
         ad_scst_without_mu = LegacyStructureData(pymatgen=p_scst_without_mu)
         if isinstance(aiida_struc, HubbardStructureData):
@@ -108,10 +101,7 @@ def re_init_supcgen(aiida_struc, ad_scst, vor_site):
     p_scst_without_mu = p_scst_mu.copy()
     p_scst_without_mu.pop(-1)    #pop out the muon since it is the last that was appendded
 
-    if isinstance(aiida_struc,StructureData):
-        ad_scst = StructureData(pymatgen=p_scst_mu)
-        ad_scst_without_mu = StructureData(pymatgen=p_scst_without_mu)
-    elif isinstance(aiida_struc,LegacyStructureData):
+    if isinstance(aiida_struc,LegacyStructureData):
         ad_scst = LegacyStructureData(pymatgen=p_scst_mu)
         ad_scst_without_mu = LegacyStructureData(pymatgen=p_scst_without_mu)
         if isinstance(aiida_struc, HubbardStructureData):
@@ -184,7 +174,7 @@ class IsolatedImpurityWorkChain(ProtocolMixin, WorkChain):
 
         spec.input(
             "structure",
-            valid_type=(StructureData,LegacyStructureData),
+            valid_type=(LegacyStructureData, HubbardStructureData),
             required=True,
             help="Input initial structure",
         )
@@ -281,7 +271,7 @@ class IsolatedImpurityWorkChain(ProtocolMixin, WorkChain):
             cls.set_outputs,
         )
 
-        spec.output("Converged_supercell", valid_type=(StructureData,LegacyStructureData), required=True)
+        spec.output("Converged_supercell", valid_type=(HubbardStructureData,LegacyStructureData), required=True)
         spec.output("Converged_SCmatrix", valid_type=orm.ArrayData, required=True)
 
         spec.exit_code(
@@ -310,7 +300,7 @@ class IsolatedImpurityWorkChain(ProtocolMixin, WorkChain):
     def get_builder_from_protocol(
         cls,
         pw_code: orm.Code,
-        structure: Union[StructureData, LegacyStructureData],
+        structure: Union[HubbardStructureData, LegacyStructureData],
         protocol: str = None,
         overrides: dict = None,
         relax_unitcell: bool = False, 

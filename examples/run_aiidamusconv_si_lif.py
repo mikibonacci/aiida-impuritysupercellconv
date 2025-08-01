@@ -14,10 +14,7 @@ from aiida.orm import StructureData as LegacyStructureData
 
 #choose the StructureData to be used in the simulation.
 structuredata="old"
-if structuredata=="new":    
-    StructureData = DataFactory("atomistic.structure")
-else:
-    StructureData = LegacyStructureData
+StructureData = LegacyStructureData
     
 system = "Si" #LiF, Si
 
