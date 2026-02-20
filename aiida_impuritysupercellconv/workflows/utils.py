@@ -90,7 +90,7 @@ class ScGenerators:
 
     def __init__(self, py_struc):
         self.py_struc = py_struc
-        self.max_atoms = np.Inf
+        self.max_atoms = np.inf
         # self.py_scst     = None
         # self.mu_frac_coord  = None
 
