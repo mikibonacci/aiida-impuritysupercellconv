@@ -82,3 +82,27 @@ sc_matrix = node.outputs.Converged_SCmatrix.get_array('sc_mat')
 print(supercell.get_formula())
 print(sc_matrix)
 ```
+
+## How to cite
+
+If you use this package for published research, please cite:
+
+> Ifeanyi J. Onuorah, Miki Bonacci et al.,
+> [*Automated computational workflows for muon spin spectroscopy*](https://pubs.rsc.org/en/content/articlelanding/2025/dd/d4dd00314d),
+> Digital Discovery **4**, 523-538 (2025).
+
+Also cite the underlying AiiDA infrastructure:
+
+> Sebastiaan P. Huber et al.,
+> [*AiiDA 1.0, a scalable computational infrastructure for automated reproducible workflows and data provenance*](https://doi.org/10.1038/s41597-020-00638-4),
+> Scientific Data **7**, 300 (2020).
+
+## Acknowledgements
+
+We acknowledge support from:
+
+- The [NCCR MARVEL](http://nccr-marvel.ch/) funded by the Swiss National Science Foundation.
+- The PNRR MUR project [ECS-00000033-ECOSISTER](https://ecosister.it/).
+
+<img src="source/images/MARVEL_logo.png" width="200"/>
+<img src="source/images/ecosister_logo.png" width="200"/>
