@@ -1,0 +1,77 @@
+site_name: aiida-impuritysupercellconv
+site_description: AiiDA plugin for converging the supercell size for an interstitial impurity calculation
+site_url: https://github.com/positivemuon/aiida-impuritysupercellconv
+repo_url: https://github.com/positivemuon/aiida-impuritysupercellconv
+repo_name: positivemuon/aiida-impuritysupercellconv
+
+theme:
+  name: material
+  features:
+    - content.code.copy
+    - content.code.annotate
+    - navigation.tabs
+    - navigation.tabs.sticky
+    - navigation.sections
+    - navigation.expand
+    - navigation.top
+    - search.highlight
+    - search.share
+  palette:
+    - scheme: default
+      primary: teal
+      accent: cyan
+      toggle:
+        icon: material/weather-night
+        name: Switch to dark mode
+    - scheme: slate
+      primary: teal
+      accent: cyan
+      toggle:
+        icon: material/weather-sunny
+        name: Switch to light mode
+
+markdown_extensions:
+  - admonition
+  - def_list
+  - footnotes
+  - toc:
+      permalink: true
+  - pymdownx.details
+  - pymdownx.highlight:
+      anchor_linenums: true
+      line_spans: __span
+      pygments_lang_class: true
+  - pymdownx.inlinehilite
+  - pymdownx.snippets
+  - pymdownx.superfences
+  - pymdownx.tabbed:
+      alternate_style: true
+  - attr_list
+  - md_in_html
+  - pymdownx.emoji:
+      emoji_index: !!python/name:material.extensions.emoji.twemoji
+      emoji_generator: !!python/name:material.extensions.emoji.to_svg
+
+plugins:
+  - search
+
+nav:
+  - Home: index.md
+  - Installation: installation.md
+  - Tutorials:
+    - Overview: tutorials/index.md
+    - Basic usage (Si and LiF): tutorials/1_basic_si_lif.md
+    - MLIP forces (experimental): tutorials/2_mlip_forces.md
+  - How-to guides:
+    - Overview: how_to/index.md
+    - Use the builder: how_to/builder.md
+    - Hubbard DFT+U: how_to/hubbard.md
+    - Pre-relax the unit cell: how_to/pre_relaxation.md
+    - Analyze results: how_to/analyze_results.md
+  - Reference:
+    - Workflows: reference/workflows.md
+    - Utilities: reference/utils.md
+  - Advanced:
+    - Overview: advanced/index.md
+    - Workflow internals: advanced/workflow_internals.md
+    - MLIP force calculations (experimental): advanced/ml_features.md

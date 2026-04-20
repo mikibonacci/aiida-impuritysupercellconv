@@ -7,7 +7,12 @@ from aiida.common import AttributeDict
 from aiida.engine import ToContext, WorkChain, calcfunction, if_, while_
 from aiida.plugins import WorkflowFactory, DataFactory
 
-from aiida_pythonjob import PythonJob
+try:
+    from aiida_pythonjob import PythonJob
+    HAS_PYTHONJOB = True
+except ImportError:
+    HAS_PYTHONJOB = False
+    PythonJob = None
 
 
 from aiida_quantumespresso.workflows.protocols.utils import ProtocolMixin
@@ -191,15 +196,23 @@ class IsolatedImpurityWorkChain(ProtocolMixin, WorkChain):
         """Specify inputs and outputs."""
         super().define(spec)
 
-        spec.expose_inputs(
-            PythonJob, 
-            namespace='pythonjob',
-            namespace_options={
-                'required': False, 
-                'populate_defaults': False,
-                'help': 'Inputs for MLIPs force calculations.',
-            },
-        )
+        if HAS_PYTHONJOB:
+            spec.expose_inputs(
+                PythonJob,
+                namespace='pythonjob',
+                namespace_options={
+                    'required': False,
+                    'populate_defaults': False,
+                    'help': 'Inputs for MLIPs force calculations.',
+                },
+            )
+            spec.input(
+                "ML_forces",
+                valid_type=orm.Bool,
+                default=lambda: orm.Bool(False),
+                required=False,
+                help="Use MLIP (via pythonjob/ASE) for force calculations instead of DFT",
+            )
         spec.input(
             "structure",
             valid_type=valid_types,
@@ -249,13 +262,6 @@ class IsolatedImpurityWorkChain(ProtocolMixin, WorkChain):
             default=lambda: orm.Bool(True),
             required=False,
             help="To run charged supercell for positive muon or not (neutral supercell)",
-        )
-        spec.input(
-            "ML_forces",
-            valid_type=orm.Bool,
-            default=lambda: orm.Bool(False),
-            required=False,
-            help="Use MLIP (via pythonjob/ASE) for force calculations instead of DFT",
         )
         spec.input(
             "relax_unitcell",
@@ -359,6 +365,7 @@ class IsolatedImpurityWorkChain(ProtocolMixin, WorkChain):
         ML_forces: bool = False,
         pythonjob_code: orm.Code = None,
         callback_calculator: callable = None,
+        model_name: str = None,
         additional_pythonjob_inputs: dict = {},
         **kwargs,
     ):
@@ -380,6 +387,7 @@ class IsolatedImpurityWorkChain(ProtocolMixin, WorkChain):
         :param ML_forces: Use MLIP (via pythonjob/ASE) for force calculations instead of DFT.
         :param pythonjob_code: The PythonJob code to use for MLIP calculations (required if ML_forces is True).
         :param callback_calculator: The ASE calculator callback function (required if ML_forces is True).
+        :param model_name: Name/label of the MLIP model, stored in the output for provenance. Optional.
         :param additional_pythonjob_inputs: Additional inputs for the PythonJob (e.g., metadata, other settings).
         :return: a process builder instance with all inputs defined ready for launch.
         """
@@ -469,13 +477,16 @@ class IsolatedImpurityWorkChain(ProtocolMixin, WorkChain):
                 structure=structure,
                 pythonjob_code=pythonjob_code,
                 callback_calculator=callback_calculator,
+                charged_supercell=charge_supercell,
+                model_name=model_name,
                 **additional_pythonjob_inputs,
             )
             
             builder.pythonjob = pythonjob_inputs
         
         #we can set this also wrt to some protocol
-        builder.min_length=orm.Float(min_length)
+        if min_length is not None:
+            builder.min_length = orm.Float(min_length)
         builder.conv_thr=orm.Float(conv_thr)
         builder.kpoints_distance=orm.Float(kpoints_distance)
         builder.max_iter_num=orm.Int(max_iter_num)
@@ -483,7 +494,7 @@ class IsolatedImpurityWorkChain(ProtocolMixin, WorkChain):
         builder.structure = structure
         builder.pseudo_family = orm.Str(pseudo_family)
         builder.charge_supercell = orm.Bool(charge_supercell)
-        builder.ML_forces = orm.Bool(ML_forces)
+        if HAS_PYTHONJOB: builder.ML_forces = orm.Bool(ML_forces)
         
         return builder
     
@@ -495,7 +506,7 @@ class IsolatedImpurityWorkChain(ProtocolMixin, WorkChain):
     
     def should_run_mlip_forces(self):
         """Check if we should run MLIP force calculations."""
-        return self.inputs.ML_forces.value
+        return self.inputs.ML_forces.value if hasattr(self.inputs, "ML_forces") else False
     
     def run_relax(self):
         """Run the `PwBaseWorkChain` to run a relax `PwCalculation`."""
@@ -562,6 +573,7 @@ class IsolatedImpurityWorkChain(ProtocolMixin, WorkChain):
         # Without muon
         inputs.function_inputs.atoms = self.ctx.sup_struc_without_mu
         inputs.metadata.call_link_label = f'forces_without_muon_iter{self.ctx.n.value:02d}'
+        inputs.function_inputs.charged_supercell = orm.Bool(False)
         runs["without_muon"] = self.submit(PythonJob, **inputs)
         self.report(
             f"Launching PythonJob (PK={runs['without_muon'].pk}) for force calculation without muon"
@@ -616,12 +628,13 @@ class IsolatedImpurityWorkChain(ProtocolMixin, WorkChain):
             else:
                 # Handle different output types: DFT (output_trajectory) vs MLIP (forces)
                 if 'pythonjob' in calculation.process_type:
-                    # MLIP calculation - convert forces to trajectory-like format
-                    forces_array = calculation.outputs.forces.get_array("default")
+                    # MLIP calculation - forces stored as orm.List (plain Python list)
+                    # because the pythonjob returns .tolist() to avoid numpy pickle issues.
+                    forces_array = np.array(calculation.outputs.forces.get_list())
                     traj_node = orm.ArrayData()
                     traj_node.set_array("forces", np.array([forces_array]))
                     self.ctx.traj_out[run] = traj_node
-                elif isinstance(calculation, PwBaseWorkChain):
+                elif 'quantumespresso.pw.base' in calculation.process_type:
                     # DFT calculation - use output_trajectory
                     self.ctx.traj_out[run] = calculation.outputs.output_trajectory
                 else:
@@ -636,10 +649,10 @@ class IsolatedImpurityWorkChain(ProtocolMixin, WorkChain):
                                               self.ctx.traj_out["without_muon"],
                                               self.ctx.conv_thr)
             return conv_res.value == False
-        except:
+        except Exception:
             self.report(
                 f"Exiting IsolatedImpurityWorkChain,Error in fitting the forces of supercell,"
-                "iteration no. <{self.ctx.n}>) to an exponential, maybe force data not exponential"
+                f"iteration no. <{self.ctx.n}>) to an exponential, maybe force data not exponential"
             )
             return self.exit_codes.ERROR_FITTING_FORCES_TO_EXPONENTIAL
 
@@ -665,7 +678,7 @@ class IsolatedImpurityWorkChain(ProtocolMixin, WorkChain):
         """Exit code if max iteration number is reached"""
         self.report(
             f"Exiting IsolatedImpurityWorkChain, Coverged supercell NOT achieved, next iter num"
-            " <{self.ctx.n}> is greater than max iteration number {self.inputs.max_iter_num.value}"
+            f" <{self.ctx.n}> is greater than max iteration number {self.inputs.max_iter_num.value}"
         )
         return self.exit_codes.ERROR_NUM_CONVERGENCE_ITER_EXCEEDED
 
@@ -674,6 +687,9 @@ class IsolatedImpurityWorkChain(ProtocolMixin, WorkChain):
         self.report("Setting Outputs")
         self.out("Converged_supercell", self.ctx.sup_struc_mu)
         self.out("Converged_SCmatrix", self.ctx.sc_mat)
+        
+        self.report("Converged supercell found with supercell matrix:")
+        self.report(self.ctx.sc_mat.get_array("sc_mat"))
     
 
 # Functions for the input validation.
