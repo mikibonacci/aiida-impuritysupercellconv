@@ -7,6 +7,13 @@ from aiida.common import AttributeDict
 from aiida.engine import ToContext, WorkChain, calcfunction, if_, while_
 from aiida.plugins import WorkflowFactory, DataFactory
 
+try:
+    from aiida_pythonjob import PythonJob
+    HAS_PYTHONJOB = True
+except ImportError:
+    HAS_PYTHONJOB = False
+    PythonJob = None
+
 
 from aiida_quantumespresso.workflows.protocols.utils import ProtocolMixin
 from aiida_quantumespresso.common.types import ElectronicType, RelaxType, SpinType
@@ -16,10 +23,17 @@ from .utils import ChkConvergence, ScGenerators
 from aiida.orm import StructureData as LegacyStructureData
 from aiida_quantumespresso.data.hubbard_structure import HubbardStructureData
 
-from aiida_muon.workflows.utils import check_get_hubbard_u_parms
+from aiida_muon.utils.hubbard import check_get_hubbard_u_parms
 from aiida_quantumespresso.common.hubbard import Hubbard
 
-StructureData = DataFactory("atomistic.structure")
+try:
+    StructureData = DataFactory("atomistic.structure")
+    HAS_ATOMISTIC = True
+    valid_types = (StructureData, LegacyStructureData)
+except Exception:
+    HAS_ATOMISTIC = False
+    valid_types = (LegacyStructureData,)
+
 PwBaseWorkChain = WorkflowFactory('quantumespresso.pw.base')
 PwRelaxWorkChain = WorkflowFactory('quantumespresso.pw.relax')
 original_PwRelaxWorkChain = WorkflowFactory('quantumespresso.pw.relax')
@@ -46,7 +60,7 @@ def create_hubbard_structure(structure: LegacyStructureData,hubbard_dict: dict):
     hubbard_structure.hubbard = Hubbard.from_list(hubbard_structure.hubbard.to_list(), projectors="atomic")
     return hubbard_structure
 
-def assign_hubbard_parameters(structure: StructureData, hubbard_dict):
+def assign_hubbard_parameters(structure: 'StructureData', hubbard_dict):
     for kind, U in hubbard_dict.items():
         structure.hubbard.initialize_onsites_hubbard(kind, '3d', U, 'U', use_kinds=True)
         
@@ -62,7 +76,7 @@ def init_supcgen(aiida_struc, min_length):
     p_scst_without_mu = p_scst_mu.copy()
     p_scst_without_mu.pop(-1)    #pop out the muon since it is the last that was appendded
 
-    if isinstance(aiida_struc,StructureData):
+    if HAS_ATOMISTIC and isinstance(aiida_struc, StructureData):
         ad_scst = StructureData(pymatgen=p_scst_mu)
         ad_scst_without_mu = StructureData(pymatgen=p_scst_without_mu)
     elif isinstance(aiida_struc,LegacyStructureData):
@@ -108,7 +122,7 @@ def re_init_supcgen(aiida_struc, ad_scst, vor_site):
     p_scst_without_mu = p_scst_mu.copy()
     p_scst_without_mu.pop(-1)    #pop out the muon since it is the last that was appendded
 
-    if isinstance(aiida_struc,StructureData):
+    if HAS_ATOMISTIC and isinstance(aiida_struc, StructureData):
         ad_scst = StructureData(pymatgen=p_scst_mu)
         ad_scst_without_mu = StructureData(pymatgen=p_scst_without_mu)
     elif isinstance(aiida_struc,LegacyStructureData):
@@ -182,9 +196,26 @@ class IsolatedImpurityWorkChain(ProtocolMixin, WorkChain):
         """Specify inputs and outputs."""
         super().define(spec)
 
+        if HAS_PYTHONJOB:
+            spec.expose_inputs(
+                PythonJob,
+                namespace='pythonjob',
+                namespace_options={
+                    'required': False,
+                    'populate_defaults': False,
+                    'help': 'Inputs for MLIPs force calculations.',
+                },
+            )
+            spec.input(
+                "ML_forces",
+                valid_type=orm.Bool,
+                default=lambda: orm.Bool(False),
+                required=False,
+                help="Use MLIP (via pythonjob/ASE) for force calculations instead of DFT",
+            )
         spec.input(
             "structure",
-            valid_type=(StructureData,LegacyStructureData),
+            valid_type=valid_types,
             required=True,
             help="Input initial structure",
         )
@@ -221,7 +252,7 @@ class IsolatedImpurityWorkChain(ProtocolMixin, WorkChain):
         spec.input(
             "pseudo_family",
             valid_type=orm.Str,
-            default=lambda: orm.Str("SSSP/1.2/PBE/efficiency"),
+            default=lambda: orm.Str("SSSP/1.3/PBE/efficiency"),
             required=False,
             help="The label of the pseudo family",
         )
@@ -244,7 +275,7 @@ class IsolatedImpurityWorkChain(ProtocolMixin, WorkChain):
             namespace="pwscf",
             exclude=("pw.structure", "kpoints"),
             namespace_options={
-                'required': True, 'populate_defaults':False,
+                'required': False, 'populate_defaults':False,
                 'help': 'the pwscf step.',
             },
         )  # use the  pw base workflow
@@ -260,7 +291,7 @@ class IsolatedImpurityWorkChain(ProtocolMixin, WorkChain):
             },
         )  # use the  pw relax workflow
 
-        spec.inputs.validator = input_validator
+        #spec.inputs.validator = input_validator
         
         spec.outline(
             if_(cls.should_run_relax)(
@@ -268,12 +299,22 @@ class IsolatedImpurityWorkChain(ProtocolMixin, WorkChain):
                     cls.inspect_relax
                 ),
             cls.init_supcell_gen,
-            cls.run_pw_double_scf,
+            if_(cls.should_run_mlip_forces)(
+                cls.run_ase_double_forces,
+            ).else_(
+                cls.run_pw_double_scf,
+            ),
             cls.inspect_run_get_forces,
             while_(cls.continue_iter)(
                 cls.increment_n_by_one,
                 if_(cls.iteration_num_not_exceeded)(
-                    cls.get_larger_cell, cls.run_pw_double_scf, cls.inspect_run_get_forces
+                    cls.get_larger_cell,
+                    if_(cls.should_run_mlip_forces)(
+                        cls.run_ase_double_forces,
+                    ).else_(
+                        cls.run_pw_double_scf,
+                    ),
+                    cls.inspect_run_get_forces
                 ).else_(
                     cls.exit_max_iteration_exceeded,
                 ),
@@ -281,7 +322,7 @@ class IsolatedImpurityWorkChain(ProtocolMixin, WorkChain):
             cls.set_outputs,
         )
 
-        spec.output("Converged_supercell", valid_type=(StructureData,LegacyStructureData), required=True)
+        spec.output("Converged_supercell", valid_type=valid_types, required=True)
         spec.output("Converged_SCmatrix", valid_type=orm.ArrayData, required=True)
 
         spec.exit_code(
@@ -309,8 +350,8 @@ class IsolatedImpurityWorkChain(ProtocolMixin, WorkChain):
     @classmethod
     def get_builder_from_protocol(
         cls,
-        pw_code: orm.Code,
-        structure: Union[StructureData, LegacyStructureData],
+        pw_code: orm.Code = None,
+        structure: Union[LegacyStructureData, 'StructureData'] = None,
         protocol: str = None,
         overrides: dict = None,
         relax_unitcell: bool = False, 
@@ -319,13 +360,18 @@ class IsolatedImpurityWorkChain(ProtocolMixin, WorkChain):
         conv_thr: float = 0.0257,
         kpoints_distance: float = 0.301,
         charge_supercell: bool = True,
-        pseudo_family: str ="SSSP/1.2/PBE/efficiency",
+        pseudo_family: str ="SSSP/1.3/PBE/efficiency",
         max_iter_num: int = 4,
+        ML_forces: bool = False,
+        pythonjob_code: orm.Code = None,
+        callback_calculator: callable = None,
+        model_name: str = None,
+        additional_pythonjob_inputs: dict = {},
         **kwargs,
     ):
         """Return a builder prepopulated with inputs selected according to the chosen protocol.
 
-        :param pw_code: the ``Code`` instance configured for the ``quantumespresso.pw`` plugin. Used in all the sub workchains.
+        :param pw_code: the ``Code`` instance configured for the ``quantumespresso.pw`` plugin. Used in all the sub workchains. Optional if ML_forces is True.
         :param structure: the ``StructureData`` instance to use.
         :param protocol: protocol to use, if not specified, the default will be used.
         :param overrides: optional dictionary of inputs to override the defaults of the protocol.
@@ -338,6 +384,11 @@ class IsolatedImpurityWorkChain(ProtocolMixin, WorkChain):
         :param charge_supercell: the charge in the supercell. Default is false as here we don't care about the muon charge state.
         :param pseudo_family: the label of the pseudo family.
         :param max_iter_num: Maximum number of iteration in the supercell convergence loop.
+        :param ML_forces: Use MLIP (via pythonjob/ASE) for force calculations instead of DFT.
+        :param pythonjob_code: The PythonJob code to use for MLIP calculations (required if ML_forces is True).
+        :param callback_calculator: The ASE calculator callback function (required if ML_forces is True).
+        :param model_name: Name/label of the MLIP model, stored in the output for provenance. Optional.
+        :param additional_pythonjob_inputs: Additional inputs for the PythonJob (e.g., metadata, other settings).
         :return: a process builder instance with all inputs defined ready for launch.
         """
         
@@ -374,43 +425,68 @@ class IsolatedImpurityWorkChain(ProtocolMixin, WorkChain):
 
         overrides_pwscf = recursive_merge(overrides, overrides_all)
                 
-        builder_pwscf = PwBaseWorkChain.get_builder_from_protocol(
-                pw_code,
-                structure,
-                protocol=protocol,
-                overrides=overrides_pwscf.get("base",None),
-                #overrides=overrides_pwscf,
-                pseudo_family=pseudo_family,
-                **kwargs,
-                )
-        
-        for k,v in builder_pwscf.items():
-            if k in ["structure","kpoints_distance"]: continue
-            setattr(builder.pwscf,k,v)
-        builder.pwscf.pw.pop('structure', None)
-        builder.pwscf.pop('kpoints_distance', None)  
-        builder.pwscf.pop('kpoints', None)  
-
-        builder_relax = PwRelaxWorkChain.get_builder_from_protocol(
-                pw_code,
-                structure,
-                protocol=protocol,
-                #overrides=overrides_pwscf, #IJO, we don't ever want total charge=1.0 for the unitcell relax without muon
-                overrides=overrides_pwscf.get("pre_relax",None),
-                pseudo_family=pseudo_family,
-                relax_type=RelaxType.POSITIONS, #Infinite dilute defect
-                **kwargs,
-                )
+        # Setup DFT builders only if not using MLIP
+        if not ML_forces:
+            if pw_code is None:
+                raise ValueError("pw_code is required when ML_forces is False")
                 
-        for k,v in builder_relax.items():        
-            setattr(builder.relax,k,v)   
+            builder_pwscf = PwBaseWorkChain.get_builder_from_protocol(
+                    pw_code,
+                    structure,
+                    protocol=protocol,
+                    overrides=overrides_pwscf.get("base",None),
+                    #overrides=overrides_pwscf,
+                    pseudo_family=pseudo_family,
+                    **kwargs,
+                    )
+            
+            for k,v in builder_pwscf.items():
+                if k in ["structure","kpoints_distance"]: continue
+                setattr(builder.pwscf,k,v)
+            builder.pwscf.pw.pop('structure', None)
+            builder.pwscf.pop('kpoints_distance', None)  
+            builder.pwscf.pop('kpoints', None)  
+
+            builder_relax = PwRelaxWorkChain.get_builder_from_protocol(
+                    pw_code,
+                    structure,
+                    protocol=protocol,
+                    #overrides=overrides_pwscf, #IJO, we don't ever want total charge=1.0 for the unitcell relax without muon
+                    overrides=overrides_pwscf.get("pre_relax",None),
+                    pseudo_family=pseudo_family,
+                    relax_type=RelaxType.POSITIONS, #Infinite dilute defect
+                    **kwargs,
+                    )
+                    
+            for k,v in builder_relax.items():        
+                setattr(builder.relax,k,v)   
+            
+            builder.relax.pop('base_final_scf', None) 
+            if not relax_unitcell:
+                builder.relax.base.pw.parameters = orm.Dict({})
         
-        builder.relax.pop('base_final_scf', None) 
-        if not relax_unitcell:
-            builder.relax.base.pw.parameters = orm.Dict({})
+        # Setup MLIP pythonjob inputs if requested
+        if ML_forces:
+            if pythonjob_code is None:
+                raise ValueError("pythonjob_code is required when ML_forces is True")
+            if callback_calculator is None:
+                raise ValueError("callback_calculator is required when ML_forces is True")
+            
+            from aiida_impuritysupercellconv.pythonjobs.forces import prepare_ase_pythonjob_forces_inputs
+            pythonjob_inputs = prepare_ase_pythonjob_forces_inputs(
+                structure=structure,
+                pythonjob_code=pythonjob_code,
+                callback_calculator=callback_calculator,
+                charged_supercell=charge_supercell,
+                model_name=model_name,
+                **additional_pythonjob_inputs,
+            )
+            
+            builder.pythonjob = pythonjob_inputs
         
         #we can set this also wrt to some protocol
-        builder.min_length=orm.Float(min_length)
+        if min_length is not None:
+            builder.min_length = orm.Float(min_length)
         builder.conv_thr=orm.Float(conv_thr)
         builder.kpoints_distance=orm.Float(kpoints_distance)
         builder.max_iter_num=orm.Int(max_iter_num)
@@ -418,6 +494,7 @@ class IsolatedImpurityWorkChain(ProtocolMixin, WorkChain):
         builder.structure = structure
         builder.pseudo_family = orm.Str(pseudo_family)
         builder.charge_supercell = orm.Bool(charge_supercell)
+        if HAS_PYTHONJOB: builder.ML_forces = orm.Bool(ML_forces)
         
         return builder
     
@@ -426,6 +503,10 @@ class IsolatedImpurityWorkChain(ProtocolMixin, WorkChain):
         if "relax" in self.inputs:
             return len(self.inputs.relax.base.pw.parameters.get_dict()) > 0
         return False
+    
+    def should_run_mlip_forces(self):
+        """Check if we should run MLIP force calculations."""
+        return self.inputs.ML_forces.value if hasattr(self.inputs, "ML_forces") else False
     
     def run_relax(self):
         """Run the `PwBaseWorkChain` to run a relax `PwCalculation`."""
@@ -475,6 +556,31 @@ class IsolatedImpurityWorkChain(ProtocolMixin, WorkChain):
         self.ctx.musite = result_ini["Vor_site"]
         self.ctx.sc_mat = result_ini["SCmat"]
 
+    def run_ase_double_forces(self):
+        """Run ASE force calculations with and without the muon using MLIP."""
+        inputs = AttributeDict(self.exposed_inputs(PythonJob, namespace='pythonjob'))
+        
+        runs = {}
+        
+        # With muon
+        inputs.function_inputs.atoms = self.ctx.sup_struc_mu
+        inputs.metadata.call_link_label = f'forces_with_muon_iter{self.ctx.n.value:02d}'
+        runs["with_muon"] = self.submit(PythonJob, **inputs)
+        self.report(
+            f"Launching PythonJob (PK={runs['with_muon'].pk}) for force calculation with muon"
+        )
+        
+        # Without muon
+        inputs.function_inputs.atoms = self.ctx.sup_struc_without_mu
+        inputs.metadata.call_link_label = f'forces_without_muon_iter{self.ctx.n.value:02d}'
+        inputs.function_inputs.charged_supercell = orm.Bool(False)
+        runs["without_muon"] = self.submit(PythonJob, **inputs)
+        self.report(
+            f"Launching PythonJob (PK={runs['without_muon'].pk}) for force calculation without muon"
+        )
+        
+        return ToContext(**runs)
+    
     def run_pw_double_scf(self):
         """Input Qe-pw structure and run pw with and without the muon (but the charge, if any) in the cell."""
         inputs = AttributeDict(self.exposed_inputs(PwBaseWorkChain, namespace="pwscf"))
@@ -506,19 +612,33 @@ class IsolatedImpurityWorkChain(ProtocolMixin, WorkChain):
         return ToContext(**runs)
 
     def inspect_run_get_forces(self):
-        """Inspect pw run and get forces"""
+        """Inspect calculations and get forces (both DFT and MLIP supported)."""
         self.ctx.traj_out = {}
+        
         for run in ["with_muon", "without_muon"]:
             calculation = self.ctx[run]
 
             if not calculation.is_finished_ok:
+                calc_type = "PythonJob" if 'pythonjob' in calculation.process_type else "PwBaseWorkChain"
                 self.report(
-                    f"PwBaseWorkChain<{calculation.pk}> failed"
-                    "with exit status {calculation.exit_status}"
+                    f"{calc_type}<{calculation.pk}> failed "
+                    f"with exit status {calculation.exit_status}"
                 )
                 return self.exit_codes.ERROR_SUB_PROCESS_FAILED_SCF
             else:
-                self.ctx.traj_out[run] = calculation.outputs.output_trajectory
+                # Handle different output types: DFT (output_trajectory) vs MLIP (forces)
+                if 'pythonjob' in calculation.process_type:
+                    # MLIP calculation - forces stored as orm.List (plain Python list)
+                    # because the pythonjob returns .tolist() to avoid numpy pickle issues.
+                    forces_array = np.array(calculation.outputs.forces.get_list())
+                    traj_node = orm.ArrayData()
+                    traj_node.set_array("forces", np.array([forces_array]))
+                    self.ctx.traj_out[run] = traj_node
+                elif 'quantumespresso.pw.base' in calculation.process_type:
+                    # DFT calculation - use output_trajectory
+                    self.ctx.traj_out[run] = calculation.outputs.output_trajectory
+                else:
+                    raise ValueError(f"Unknown calculation type: {calculation.process_type} for uuid={calculation.uuid}.")
 
     def continue_iter(self):
         """check convergence and decide if to continue the loop"""
@@ -529,10 +649,10 @@ class IsolatedImpurityWorkChain(ProtocolMixin, WorkChain):
                                               self.ctx.traj_out["without_muon"],
                                               self.ctx.conv_thr)
             return conv_res.value == False
-        except:
+        except Exception:
             self.report(
                 f"Exiting IsolatedImpurityWorkChain,Error in fitting the forces of supercell,"
-                "iteration no. <{self.ctx.n}>) to an exponential, maybe force data not exponential"
+                f"iteration no. <{self.ctx.n}>) to an exponential, maybe force data not exponential"
             )
             return self.exit_codes.ERROR_FITTING_FORCES_TO_EXPONENTIAL
 
@@ -558,7 +678,7 @@ class IsolatedImpurityWorkChain(ProtocolMixin, WorkChain):
         """Exit code if max iteration number is reached"""
         self.report(
             f"Exiting IsolatedImpurityWorkChain, Coverged supercell NOT achieved, next iter num"
-            " <{self.ctx.n}> is greater than max iteration number {self.inputs.max_iter_num.value}"
+            f" <{self.ctx.n}> is greater than max iteration number {self.inputs.max_iter_num.value}"
         )
         return self.exit_codes.ERROR_NUM_CONVERGENCE_ITER_EXCEEDED
 
@@ -567,6 +687,9 @@ class IsolatedImpurityWorkChain(ProtocolMixin, WorkChain):
         self.report("Setting Outputs")
         self.out("Converged_supercell", self.ctx.sup_struc_mu)
         self.out("Converged_SCmatrix", self.ctx.sc_mat)
+        
+        self.report("Converged supercell found with supercell matrix:")
+        self.report(self.ctx.sc_mat.get_array("sc_mat"))
     
 
 # Functions for the input validation.
