@@ -20,7 +20,7 @@ classifiers = [
 keywords = ["aiida", "workflows"]
 requires-python = ">=3.8"
 dependencies = [
-    "aiida-core>=2.0,<3",
+    "aiida-core>=2.8,<3",
     "aiida-quantumespresso~=5.0",
     "aiida-pseudo",
     "pymatgen",
