@@ -20,8 +20,8 @@ classifiers = [
 keywords = ["aiida", "workflows"]
 requires-python = ">=3.8"
 dependencies = [
-    "aiida-core>=2.0,<3",
-    "aiida-quantumespresso>=4.2.0",
+    "aiida-core>=2.8,<3",
+    "aiida-quantumespresso~=5.0",
     "aiida-pseudo",
     "pymatgen",
     "pymatgen-analysis-defects; python_version >= '3.8'",
@@ -35,18 +35,20 @@ Source = "https://github.com/positivemuon/aiida-impuritysupercellconv"
 
 [project.optional-dependencies]
 docs = [
-    "sphinx",
-    "docutils",
-    "sphinx-copybutton~=0.3.0",
-    "sphinx-book-theme~=0.1.0",
-    "sphinx-click~=2.7.1"
+    "mkdocs-material>=9.0",
+    "mkdocs>=1.5",
+    "pymdown-extensions>=10.0"
 ]
 pre-commit = [
     "pre-commit>=2.21.0"
 ]
+pythonjob = [
+    "aiida-pythonjob"
+]
 tests = [
     "pgtest~=1.3",
-    "pytest~=6.0",
+    "pytest>=7.4",
+    "pytest-cov>=4.0",
     "pytest-regressions~=2.3"
 ]
 
